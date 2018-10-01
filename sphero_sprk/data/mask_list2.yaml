@@ -1,0 +1,16 @@
+- name: "Odometry"
+  values:
+    - name: "x"
+      mask: "0000 0800"
+    - name: "y"
+      mask: "0000 0400"
+- name: "Velocity"
+  values:
+    - name: "x"
+      mask: "0000 0100"
+    - name: "y"
+      mask: "0000 0080"
+- name: "Acceleration"
+  values:
+    - name: "a"
+      mask: "0000 0200"
