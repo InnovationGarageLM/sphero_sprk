@@ -46,7 +46,7 @@ class DelegateObj(bluepy.btle.DefaultDelegate):
         self._notification_lock = lock
 
     def register_callback(self, seq, callback):
-        self._callback_dict[seq] = callbackl
+        self._callback_dict[seq] = callback
 
     def register_async_callback(self, group_name, callback):
         self._data_group_callback[group_name] = callback
@@ -82,6 +82,31 @@ class DelegateObj(bluepy.btle.DefaultDelegate):
         data = self._wait_list.pop(seq)
         return (len(data) == 6 and data[0] == 255)    
 
+    def process_sensor_package(self, data):
+
+        data_length = int.from_bytes(data[3:5], 'big') - 1  # minus one for the checksum_val
+
+        index = 5  # where the data starts
+
+        # the order is same as the mask list
+        mask_list = self._sphero_obj._mask_list1 + self._sphero_obj._mask_list2
+
+        for i, info in enumerate(mask_list):
+            group_key = info["name"]
+            # check if we enable the group
+            if (group_key in self._enabled_group):
+                group_info = info["values"]
+                info = {}
+                for i, value in enumerate(group_info):
+                    end_index = index + 2
+                    # it's a 16bit value
+                    info[value["name"]] = int.from_bytes(data[index:end_index], 'big', signed=True)
+                    index = end_index
+                # now we pass the info to the callback
+                # might think about spliting this into a different thread
+                if group_key in self._data_group_callback:
+                    self._data_group_callback[group_key](info)
+
     def parse_single_pack(self, data):
 
         if(data[1] == 255):
@@ -104,28 +129,8 @@ class DelegateObj(bluepy.btle.DefaultDelegate):
             if(data[2] == int.from_bytes(b'\x03','big')):
                 #the message is sensor data streaming
                 #get the number of bytes
-                data_length = int.from_bytes(data[3:5],'big') - 1#minus one for the checksum_val
+                self.process_sensor_package(data)
 
-
-                index = 5 #where the data starts
-
-                #the order is same as the mask list
-                mask_list = self._sphero_obj._mask_list
-                for i,info in enumerate(mask_list):
-                    group_key = info["name"]
-                    #check if we enable the group
-                    if(group_key in self._enabled_group):
-                        group_info = info["values"]
-                        info = {}
-                        for i,value in enumerate(group_info):
-                            end_index = index + 2
-                            #it's a 16bit value
-                            info[value["name"]] = int.from_bytes(data[index:end_index],'big',signed=True)
-                            index = end_index
-                        #now we pass the info to the callback
-                        # might think about spliting this into a different thread
-                        if group_key in self._data_group_callback:
-                            self._data_group_callback[group_key](info)
             elif(data[2] == int.from_bytes(b'\x09','big')):
                 #orbbasic error message:
                 print("orbBasic Error Message:")
@@ -192,18 +197,21 @@ class Sphero(object):
         self._seq_counter = 0
         self._stream_rate = 10
         #load the mask list
-        with open(os.path.join(os.path.dirname(__file__),'data','mask_list.yaml'),'r') as mask_file:
-            self._mask_list = yaml.load(mask_file)
-        self._curr_data_mask = bytes.fromhex("0000 0000")
+        with open(os.path.join(os.path.dirname(__file__),'data','mask_list1.yaml'),'r') as mask_file1:
+            self._mask_list1 = yaml.load(mask_file1)
+        with open(os.path.join(os.path.dirname(__file__),'data','mask_list2.yaml'),'r') as mask_file2:
+            self._mask_list2 = yaml.load(mask_file2)
+        self._data_mask1 = bytes.fromhex("0000 0000")
+        self._data_mask2 = bytes.fromhex("0000 0000")
 
         self._notification_lock = threading.RLock()
         #start a listener loop
 
-    def connect(self):
+    def connect(self, addr):
         """
         Connects the sphero with the address given in the constructor
         """
-        self._device = bluepy.btle.Peripheral(self._addr, addrType=bluepy.btle.ADDR_TYPE_RANDOM)
+        self._device = bluepy.btle.Peripheral(addr, addrType=bluepy.btle.ADDR_TYPE_RANDOM)
         self._notifier = DelegateObj(self, self._notification_lock)
         #set notifier to be notified
         self._device.withDelegate(self._notifier)
@@ -374,7 +382,7 @@ class Sphero(object):
         heading_bytes = heading.to_bytes(2,byteorder='big')
         data = [heading_bytes[0],heading_bytes[1]]
         #send command
-        self._command("01",data, resp=resp)
+        self.command("01",data, resp=resp)
 
 
     def set_rgb_led(self, red, green, blue, resp=False):
@@ -411,26 +419,40 @@ class Sphero(object):
         else:
             return None
 
-    def _handle_mask(self,group_name, remove=False):
+    def _handle_mask(self,group_name, mask=1, remove=False):
+        '''
+        Setup Mask for Data
+        :param group_name: Name of Group in Yaml File
+        :param mask: Which YAML file to use (1 or 2)
+        :param remove: Whether this is a remove action
+        :return:
+        '''
 
         if(remove):
             optr = XOR_mask
         else:
             optr = OR_mask
-        for i,group in enumerate(self._mask_list):
-            if(group["name"] == group_name):
-                for i, value in enumerate(group["values"]):
-                    self._curr_data_mask = optr(self._curr_data_mask, bytes.fromhex(value["mask"]))
+
+        if(mask==1):
+            for i,group in enumerate(self._mask_list1):
+                if(group["name"] == group_name):
+                    for i, value in enumerate(group["values"]):
+                        self._data_mask1 = optr(self._data_mask1, bytes.fromhex(value["mask"]))
+        elif(mask==2):
+            for i,group in enumerate(self._mask_list2):
+                if(group["name"] == group_name):
+                    for i, value in enumerate(group["values"]):
+                        self._data_mask2 = optr(self._data_mask2, bytes.fromhex(value["mask"]))
 
 
-    def _start_data_stream(self, group_name,rate):
+    def _start_data_stream(self, group_name,rate, mask_id = 1):
         ##  '\xff\xff\x02\x11\x01\x0e\x00(\x00\x01\x00\x00\x1c\x00\x00\x00\x00\x00\x00\x98'
 
         #handle mask
-        self._handle_mask(group_name)
+        self._handle_mask(group_name, mask=mask_id)
         #send the mask as data
         self._stream_rate = rate
-        self._send_data_command(rate,self._curr_data_mask,(0).to_bytes(4,'big'))
+        self._send_data_command(rate, self._data_mask1, self._data_mask2)
 
     def _send_data_command(self,rate,mask1,mask2,sample=1):
         N = ((int)(400/rate)).to_bytes(2,byteorder='big')
@@ -439,13 +461,14 @@ class Sphero(object):
         PCNT = (0).to_bytes(1,'big')
         #MASK2 = (mask2).to_bytes(4,'big')
         data = [N,M, mask1 ,PCNT,mask2]
-        self.command("11",data, resp=True) #make sure sphero actully receive this
+        resp = self.command("11",data, resp=True) #make sure sphero actully receive this
+        return resp
 
 
-    def _stop_data_stream(self, group_name):
+    def _stop_data_stream(self, group_name, mask_id = 1):
         #handle mask
-        self._handle_mask(group_name,remove=True)
-        self._send_data_command(self._stream_rate,self._curr_data_mask,(0).to_bytes(4,'big'))
+        self._handle_mask(group_name, mask=mask_id, remove=True)
+        self._send_data_command(self._stream_rate, self._data_mask1, (0).to_bytes(4, 'big'))
 
 
     def start_gyro_callback(self,rate,callback):
@@ -483,6 +506,18 @@ class Sphero(object):
         self._notifier.register_async_callback(name,callback)
         #start data stream
         self._start_data_stream(name,rate)
+
+    def start_odometry_callback(self,rate,callback):
+        """
+        Set a IMU callback that streams the data to the callback
+
+        callback - (function) function that we will pass the information when there is a callback
+        """
+        name = "Odometry"
+        #first we register the callback with the notifier
+        self._notifier.register_async_callback(name,callback)
+        #start data stream
+        self._start_data_stream(name,rate, mask_id=2)
 
     def stop_gyro_callback(self):
         self._stop_data_stream("Gyro")
