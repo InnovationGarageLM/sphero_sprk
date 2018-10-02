@@ -5,6 +5,7 @@ import time
 import binascii
 import os
 import threading
+import struct
 
 import bluepy
 import yaml
@@ -82,14 +83,51 @@ class DelegateObj(bluepy.btle.DefaultDelegate):
         data = self._wait_list.pop(seq)
         return (len(data) == 6 and data[0] == 255)    
 
-    def process_sensor_package(self, data):
+    def verify_checksum(self,data):
+        data_length = int.from_bytes(data[3:5], 'big') - 1  # minus one for the checksum_val
+
+        pkt_lent = len(data)
+
+        my_sum = sum(data[3:data_length+3])%255
+        chk_sum = (my_sum ^ 65535)%255
+
+        chk_sum_start = data_length + 5
+        chk_sum_end = data_length + 6
+        pkt_chk_sum = int.from_bytes(data[chk_sum_start:chk_sum_end], 'big')
+        return chk_sum == pkt_chk_sum
+
+    def process_sensor_pkt(self, active_masks, data):
+        if(len(active_masks) == 0):
+            return
+
+
+        data_length = int.from_bytes(data[3:5], 'big') - 1  # minus one for the checksum_val
+
+        total_processed = 0
+
+        start = 5
+        stop = 5
+
+        for mask in active_masks:
+            len_mask = mask['len'] * 2
+            stop = len_mask + start
+            sub_data = data[start:stop]
+
+            mask['callback'](sub_data)
+            total_processed = total_processed + len_mask
+            start = stop
+
+            if(total_processed >= data_length):
+                break
+
+        if(total_processed != data_length):
+            print("Data Length Did not match mask list")
+
+    def process_sensor_package(self, data, mask_list):
 
         data_length = int.from_bytes(data[3:5], 'big') - 1  # minus one for the checksum_val
 
         index = 5  # where the data starts
-
-        # the order is same as the mask list
-        mask_list = self._sphero_obj._mask_list1 + self._sphero_obj._mask_list2
 
         for i, info in enumerate(mask_list):
             group_key = info["name"]
@@ -129,7 +167,14 @@ class DelegateObj(bluepy.btle.DefaultDelegate):
             if(data[2] == int.from_bytes(b'\x03','big')):
                 #the message is sensor data streaming
                 #get the number of bytes
-                self.process_sensor_package(data)
+
+                # the order is same as the mask list
+                mask_list = self._sphero_obj._mask_list1 + self._sphero_obj._mask_list2
+
+                masks = self._sphero_obj.get_mask_order()
+                self.process_sensor_pkt(masks, data)
+
+                #self.process_sensor_package(data, mask_list)
 
             elif(data[2] == int.from_bytes(b'\x09','big')):
                 #orbbasic error message:
@@ -182,6 +227,21 @@ class Sphero(object):
     RAW_MOTOR_MODE_BRAKE = "03"
     RAW_MOTOR_MODE_IGNORE = "04"
 
+    MASK_ORDER = [
+        {"name":"accel_raw", "size":3},
+        {"name":"gyro_raw", "size":3},
+        {"name":"emf_raw", "size":2},
+        {"name":"pwm_raw", "size":2},
+        {"name":"imu_filtered", "size":3},
+        {"name":"accel_filtered", "size":3},
+        {"name":"gyro_filtered", "size":3},
+        {"name":"emf_filtered", "size":2},
+        {"name":"quarternion", "size":4},
+        {"name":"odometer", "size":2},
+        {"name":"accelone", "size":1},
+        {"name":"velocity", "size":2},
+    ]
+
     def __init__(self, addr=None):
 
 
@@ -203,6 +263,9 @@ class Sphero(object):
             self._mask_list2 = yaml.load(mask_file2)
         self._data_mask1 = bytes.fromhex("0000 0000")
         self._data_mask2 = bytes.fromhex("0000 0000")
+
+        self._active_masks = {}
+        self._active_mask_callbacks = []
 
         self._notification_lock = threading.RLock()
         #start a listener loop
@@ -445,15 +508,6 @@ class Sphero(object):
                         self._data_mask2 = optr(self._data_mask2, bytes.fromhex(value["mask"]))
 
 
-    def _start_data_stream(self, group_name,rate, mask_id = 1):
-        ##  '\xff\xff\x02\x11\x01\x0e\x00(\x00\x01\x00\x00\x1c\x00\x00\x00\x00\x00\x00\x98'
-
-        #handle mask
-        self._handle_mask(group_name, mask=mask_id)
-        #send the mask as data
-        self._stream_rate = rate
-        self._send_data_command(rate, self._data_mask1, self._data_mask2)
-
     def _send_data_command(self,rate,mask1,mask2,sample=1):
         N = ((int)(400/rate)).to_bytes(2,byteorder='big')
         #N = (40).to_bytes(2,byteorder='big')
@@ -470,63 +524,55 @@ class Sphero(object):
         self._handle_mask(group_name, mask=mask_id, remove=True)
         self._send_data_command(self._stream_rate, self._data_mask1, (0).to_bytes(4, 'big'))
 
+    def get_mask_order(self):
+        mask_order = []
 
-    def start_gyro_callback(self,rate,callback):
-        """
-        Set a gyro callback that streams the data to the callback
+        mask_list = self._active_masks
 
-        callback - (function) function that we will pass the information when there is a callback
-        """
-        name = "Gyro"
+        for mask in Sphero.MASK_ORDER:
+            name = mask['name']
+
+            if(name in mask_list):
+                if(not mask_list[name] is None):
+                    mask_order.append({'len': mask['size'], 'callback': self._active_masks[name]})
+
+        return mask_order
+
+    def add_mask(self, mask, callback):
+        self._active_masks[mask] = callback
+
+    def remove_mask(self, mask):
+        self._active_masks[mask] = None
+
+    def update_streaming(self, rate=10):
+        '''
+        Update Streaming
+        :param rate: Rate of Streaming (Make sure factor of 400Hz)
+        :return:
+        '''
+        self._stream_rate = rate
+        self._send_data_command(rate, self._data_mask1, self._data_mask2)
+        pass
+
+    def set_stream_callback(self, name, callback, mask_id = 1):
+        '''
+        Set a callback that streams the specified data to the callback
+
+        :param name: Name of Group, must match mask_list1 or mask_list2
+        :param callback: (function) function that we will pass the information when there is a callback
+        :param mask_id: Which mask (1 or 2)
+        :return:
+        '''
+
         #first we register the callback with the notifier
         self._notifier.register_async_callback(name,callback)
-        #start data stream
-        self._start_data_stream(name,rate)
+        self.add_mask(name, callback)
 
-    def start_accel_callback(self,rate,callback):
-        """
-        Set a accelerator callback that streams the data to the callback
+        # enable mask
+        self._handle_mask(name, mask=mask_id)
 
-        callback - (function) function that we will pass the information when there is a callback
-        """
-        name = "Accel"
-        #first we register the callback with the notifier
-        self._notifier.register_async_callback(name,callback)
-        #start data stream
-        self._start_data_stream(name,rate)
-
-    def start_IMU_callback(self,rate,callback):
-        """
-        Set a IMU callback that streams the data to the callback
-
-        callback - (function) function that we will pass the information when there is a callback
-        """
-        name = "IMU"
-        #first we register the callback with the notifier
-        self._notifier.register_async_callback(name,callback)
-        #start data stream
-        self._start_data_stream(name,rate)
-
-    def start_odometry_callback(self,rate,callback):
-        """
-        Set a IMU callback that streams the data to the callback
-
-        callback - (function) function that we will pass the information when there is a callback
-        """
-        name = "Odometry"
-        #first we register the callback with the notifier
-        self._notifier.register_async_callback(name,callback)
-        #start data stream
-        self._start_data_stream(name,rate, mask_id=2)
-
-    def stop_gyro_callback(self):
-        self._stop_data_stream("Gyro")
-
-    def stop_accel_callback(self):
-        self._stop_data_stream("Accel")
-
-    def stop_IMU_callback(self):
-        self._stop_data_stream("IMU")
+    def remove_stream_callback(self, name, mask_id = 1):
+        self._handle_mask(name, mask=mask_id, remove=True)
 
     def set_stabilization(self,bool_flag, resp=False):
         """
