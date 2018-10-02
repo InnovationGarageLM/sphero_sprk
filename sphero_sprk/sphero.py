@@ -249,7 +249,7 @@ class Sphero(object):
             #search for sphero
             sphero_list = search_for_sphero()
             if(len(sphero_list) == 0):
-                raise "No Sphero Found in Vicinity"
+                raise Exception("No Sphero Found in Vicinity")
             addr = sphero_list[0]
 
         self._addr = addr
@@ -351,17 +351,7 @@ class Sphero(object):
         #print("cmd:{} packet:{}".format(cid, b"".join(packet)))
         with self._notification_lock:
             self._cmd_characteristics[CommandsCharacteristic].write(b"".join(packet))
-        return seq_val        
-
-
-    # def sleep(self, timeout):
-    #     """
-    #     Sleep function that allows the notifications to be fired
-    #     """
-    #     startTime = time.time()
-    #     while(time.time() - startTime <= timeout):
-    #         #time.sleep(1)
-    #         #self._device.waitForNotifications(1)
+        return seq_val
 
     def _listening_loop(self):
         pass

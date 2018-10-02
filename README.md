@@ -38,20 +38,47 @@ Currently supported commands
  Sphero
  - set_rgb_led(red, green, blue)
  - get_rgb_led()
- - start_gyro_callback(callback function)
- - start_accel_callback(callback function)
- - start_imu_callback(callback function)
  - set_stabilization(bool)
  - set_raw_motor_values(lmode, lpower, rmode, rpower)
  - set_heading(new_zero_heading_according_to_old_heading)
  - roll(heading, speed)
 
+Listening for Streaming Messages
+------------------------------------
+
+Use "set_stream_callback" to your desired stream:
+- set_stream_callback(self, name, callback, mask_id = 1):
+
+Where name is one of the following:
+
+On Mask 1:
+- accel_raw
+- gyro_raw
+- emf_raw
+- pwm_raw
+- imu_filtered
+- accel_filtered
+- gyro_filtered
+- emf_filtered
+
+On Mask 2:
+- quarternion
+- odometer
+- accelone
+- velocity
+
+And the callback is a method that will process a byte array of 16-bit ints
+
+Specify which mask the item is on by using mask_id (2 for odometer for example)
 
  Common Errors
  ---------------------------------------
  
 *  if program throws `FileNotFoundError: [Errno 2] No such file or directory: '/home/$USER/python3.4/site-packages/bluepy/bluepy-helper'.` Go to the directory where bluepy is installed(`/home/$USER/python3.4/site-packages/bluepy/`) and run the makefile located in the directory.
 *  if the program halts at the beginning, restarting the program a few times will solve the problem. There's a known issue with bluepy sometimes getting stuck at the initialization phase.
+*  if you get an error with the bluetooth, most likely you need to change the permissions of the bluetooth helper, try:
+    
+    setcap 'cap_net_raw,cap_net_admin+eip' \<Path to Python>/dist-packages/bluepy/bluepy-helper 
 
 Contact & License
 ----------------------------------------------
