@@ -1,15 +1,13 @@
 #!/usr/bin/python3
 
-import sys
-import time
 import binascii
 import os
 import threading
-import struct
 
 import bluepy
 import yaml
 from .util import *
+from sphero_sprk.delegate_object import DelegateObj
 
 #should it be in a different format?
 RobotControlService = "22bb746f2ba075542d6f726568705327"
@@ -30,193 +28,6 @@ CommandsCharacteristic = "22bb746f2ba175542d6f726568705327"
 #     GYRO_X = bytes.fromhex("0000 1000")
 #     GYRO_Y = bytes.fromhex("0000 0800")
 #     GYRO_Z = bytes.fromhex("0000 0400")
-
-
-class DelegateObj(bluepy.btle.DefaultDelegate):
-    """
-    Delegate object that get calls when there is a notification
-    """
-    def __init__(self, sphero_obj,lock):
-        bluepy.btle.DefaultDelegate.__init__(self)
-        self._sphero_obj = sphero_obj
-        self._callback_dict = {}
-        self._wait_list = {}
-        self._data_group_callback = {}
-        self._enabled_group = []
-        self._buffer_bytes = b''
-        self._notification_lock = lock
-
-    def register_callback(self, seq, callback):
-        self._callback_dict[seq] = callback
-
-    def register_async_callback(self, group_name, callback):
-        self._data_group_callback[group_name] = callback
-        self._enabled_group = list(set(self._enabled_group) | set([group_name]))
-
-    def handle_callbacks(self, packet):
-        #unregister callback
-        callback = self._callback_dict.pop(packet[3])
-        MRSP = packet[2]
-        dlen = (packet[4] - 1)
-        data = []
-        if(dlen > 0):
-            data = packet[5:5+dlen]
-        #parse the packet
-        callback(MRSP, data)
-
-    def wait_for_resp(self,seq,timeout=None):
-        #this is a dangerous function, it waits for a response in the handle notification part
-        self._wait_list[seq] = None;
-        while(self._wait_list[seq] == None):
-            #time.sleep(0.1)
-            with self._notification_lock:
-                self._sphero_obj._device.waitForNotifications(0.05)
-        return self._wait_list.pop(seq)
-
-    def wait_for_sim_response(self, seq, timeout=None):
-        #this is a dangerous function, it waits for a response in the handle notification part
-        self._wait_list[seq] = None;
-        while(self._wait_list[seq] == None):
-            #time.sleep(0.1)
-            with self._notification_lock:
-                self._sphero_obj._device.waitForNotifications(0.05)
-        data = self._wait_list.pop(seq)
-        return (len(data) == 6 and data[0] == 255)    
-
-    def verify_checksum(self,data):
-        data_length = int.from_bytes(data[3:5], 'big') - 1  # minus one for the checksum_val
-
-        pkt_lent = len(data)
-
-        my_sum = sum(data[3:data_length+3])%255
-        chk_sum = (my_sum ^ 65535)%255
-
-        chk_sum_start = data_length + 5
-        chk_sum_end = data_length + 6
-        pkt_chk_sum = int.from_bytes(data[chk_sum_start:chk_sum_end], 'big')
-        return chk_sum == pkt_chk_sum
-
-    def process_sensor_pkt(self, active_masks, data):
-        if(len(active_masks) == 0):
-            return
-
-
-        data_length = int.from_bytes(data[3:5], 'big') - 1  # minus one for the checksum_val
-
-        total_processed = 0
-
-        start = 5
-        stop = 5
-
-        for mask in active_masks:
-            len_mask = mask['len'] * 2
-            stop = len_mask + start
-            sub_data = data[start:stop]
-
-            mask['callback'](sub_data)
-            total_processed = total_processed + len_mask
-            start = stop
-
-            if(total_processed >= data_length):
-                break
-
-        if(total_processed != data_length):
-            print("Data Length Did not match mask list")
-
-    def process_sensor_package(self, data, mask_list):
-
-        data_length = int.from_bytes(data[3:5], 'big') - 1  # minus one for the checksum_val
-
-        index = 5  # where the data starts
-
-        for i, info in enumerate(mask_list):
-            group_key = info["name"]
-            # check if we enable the group
-            if (group_key in self._enabled_group):
-                group_info = info["values"]
-                info = {}
-                for i, value in enumerate(group_info):
-                    end_index = index + 2
-                    # it's a 16bit value
-                    info[value["name"]] = int.from_bytes(data[index:end_index], 'big', signed=True)
-                    index = end_index
-                # now we pass the info to the callback
-                # might think about spliting this into a different thread
-                if group_key in self._data_group_callback:
-                    self._data_group_callback[group_key](info)
-
-    def parse_single_pack(self, data):
-
-        if(data[1] == 255):
-            #get the sequence number and check if a callback is assigned
-            if(data[3] in self._callback_dict):
-                self.handle_callbacks(data)
-            #check if we have it in the wait list
-            elif(data[3] in self._wait_list):
-                self._wait_list[data[3]] = data
-            #simple response
-            elif(len(data) == 6 and data[0] == 255 and data[2] == 0):
-                pass
-                #print("receive simple response for seq:{}".format(data[3]))
-            else:
-                print("unknown response:{}".format(data))
-            #Sync Message
-        elif(data[1] == 254):
-            ##print("receive async")
-            #Async Message
-            if(data[2] == int.from_bytes(b'\x03','big')):
-                #the message is sensor data streaming
-                #get the number of bytes
-
-                # the order is same as the mask list
-                mask_list = self._sphero_obj._mask_list1 + self._sphero_obj._mask_list2
-
-                masks = self._sphero_obj.get_mask_order()
-                self.process_sensor_pkt(masks, data)
-
-                #self.process_sensor_package(data, mask_list)
-
-            elif(data[2] == int.from_bytes(b'\x09','big')):
-                #orbbasic error message:
-                print("orbBasic Error Message:")
-                print(data[2:])
-            elif(data[2] == int.from_bytes(b'\x0A','big')):
-                print(data[2:])
-            else:
-                print("unknown async response:{}".format(data))
-        else:
-            pass
-
-    def handleNotification(self, cHandle, data):
-
-        #merge the data with previous incomplete instance
-        self._buffer_bytes =  self._buffer_bytes + data
-
-        #loop through it and see if it's valid
-        while(len(self._buffer_bytes) > 0):
-                #split the data until it's a valid chunk
-                index = 1
-                max_size = len(self._buffer_bytes)
-                data_single = self._buffer_bytes[:index]
-                while (not package_validator(data_single) and index <= max_size):
-                    index += 1
-                    data_single = self._buffer_bytes[:index]
-
-                if(index >= max_size):
-                    #this mean the whole buffer it the message,
-                    #it either could mean it's invalid or valid
-                    if(package_validator(data_single)):
-                        #this mean the data is valid
-                        self._buffer_bytes = b'' #clear the buffer
-                    else:
-                        #this mean the data is not valid
-                        #keep the existing data in the buffer
-                        break #because we don't have enough data to parse anything
-                #resize the new buffer
-                self._buffer_bytes = self._buffer_bytes[index:]
-
-                #now we parse a single instant
-                self.parse_single_pack(data_single)
 
 
 class Sphero(object):
@@ -542,6 +353,7 @@ class Sphero(object):
         '''
         self._stream_rate = rate
         self._send_data_command(rate, self._data_mask1, self._data_mask2)
+        self._notifier.update_callbacks()
         pass
 
     def set_stream_callback(self, name, callback, mask_id = 1):
