@@ -204,7 +204,7 @@ class Sphero(object):
 
     def version(self):
         #NOTE returning weird data not sure what's wrong
-        seq_num = self._send_command("ff","00","02",[])
+        seq_num = self._send_command("ff",0,2,[])
         response = self._notifier.wait_for_resp(seq_num)
         data_response = response[5:-1]
         version_data = {}
@@ -217,7 +217,7 @@ class Sphero(object):
         return version_data
 
     def get_device_name(self):
-        seq_num = self._send_command("ff","00","11",[])
+        seq_num = self._send_command("ff",0x00, 0x11,[])
         response = self._notifier.wait_for_resp(seq_num)
         name_data = {}
         name_data["name"] = str(response[5:21],'utf-8').rstrip(' \t\r\n\0')
@@ -351,7 +351,7 @@ class Sphero(object):
         PCNT = (0).to_bytes(1,'big')
         #MASK2 = (mask2).to_bytes(4,'big')
         data = [N,M, mask1 ,PCNT,mask2]
-        resp = self.command("11",data, resp=True) #make sure sphero actully receive this
+        resp = self.command(CMD_CODES.CMD_SET_DATA_STREAMING,data, resp=True) #make sure sphero actully receive this
         return resp
 
 

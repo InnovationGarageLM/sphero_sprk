@@ -1,6 +1,6 @@
 import signal
 
-class Timeout():
+class Timeout(Exception):
     """Timeout class using ALARM signal."""
     class Timeout(Exception):
         pass
