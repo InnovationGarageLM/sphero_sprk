@@ -107,7 +107,6 @@ class DelegateObj(bluepy.btle.DefaultDelegate):
         :param data: packet
         :return:
         '''
-
         if (data[1] == 255):
             # get the sequence number and check if a callback is assigned
             if (data[3] in self._callback_dict):
@@ -176,9 +175,6 @@ class DelegateObj(bluepy.btle.DefaultDelegate):
 
         # merge data with any incomplete instance
         self._buffer_bytes = self._buffer_bytes + data
-
-        if(len(self._buffer_bytes) < 10):
-            return
 
         self._buffer_bytes = self.process_buffer(self._buffer_bytes)
 

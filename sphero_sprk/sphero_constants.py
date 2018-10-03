@@ -1,0 +1,66 @@
+from enum import Enum
+
+class CMD_CODES(Enum):
+    CMD_PING = [0x00, 0x01]
+    CMD_VERSION = [0x00, 0x02]
+    CMD_SET_BT_NAME = [0x00, 0x10]
+    CMD_GET_BT_NAME = [0x00, 0x11]
+    
+    CMD_SET_AUTO_RECONNECT = [0x00, 0x12]
+    CMD_GET_AUTO_RECONNECT = [0x00, 0x13]
+    CMD_GET_PWR_STATE = [0x00, 0x20]
+    CMD_SET_PWR_NOTIFY = [0x00, 0x21]
+    CMD_SLEEP = [0x00, 0x22]
+    CMD_GOTO_BL = [0x00, 0x30]
+    CMD_RUN_L1_DIAGS = [0x00, 0x40]
+    CMD_RUN_L2_DIAGS = [0x00, 0x41]
+
+    #This allows the smartphone client to adjust the orientation of Sphero by commanding a
+    # new reference heading in degrees, which ranges from 0 to 359.
+    CMD_SET_HEADING = [0x02, 0x01]
+
+    CMD_SET_STABILIZ = [0x02, 0x02]
+    CMD_SET_ROTATION_RATE = [0x02, 0x03]
+    CMD_SET_CMD_REENABLE_DEMO = [0x02, 0x06]
+    CMD_SELF_LEVEL = [0x02, 0x09]
+
+    CMD_SET_DATA_STREAMING = [0x02, 0x11]
+    CMD_SET_COLLISION_DET = [0x02, 0x12]
+    CMD_LOCATOR = [0x02, 0x13]
+    CMD_SET_ACCELERO = [0x02, 0x14]
+    CMD_READ_LOCATOR = [0x02, 0x15]
+
+    CMD_SET_RGB_LED = [0x02, 0x20]
+    CMD_SET_BACK_LED = [0x02, 0x21]
+    CMD_GET_RGB_LED = [0x02, 0x22]
+
+    CMD_ROLL = [0x02, 0x30]
+    CMD_BOOST = [0x02, 0x31]
+    CMD_MOVE = [0x02, 0x32]
+    CMD_SET_RAW_MOTORS = [0x02, 0x33]
+    CMD_SET_MOTION_TO = [0x02, 0x34]
+    CMD_SET_OPTIONS_FLAG = [0x02, 0x35]
+    CMD_GET_OPTIONS_FLAG = [0x02, 0x36]
+    CMD_SET_TEMP_OPTIONS_FLAG = [0x02, 0x37]
+    CMD_GET_TEMP_OPTIONS_FLAG = [0x02, 0x38]
+
+
+    CMD_RUN_MACRO = [0x02, 0x50]
+    CMD_SAVE_TEMP_MACRO = [0x02, 0x51]
+    CMD_SAVE_MACRO = [0x02, 0x52]
+
+    CMD_INIT_MACRO_EXECUTIVE = [0x02, 0x54]
+    CMD_ABORT_MACRO = [0x02, 0x55]
+    CMD_MACRO_STATUS = [0x02, 0x56]
+    CMD_SET_MACRO_PARAM = [0x02, 0x57]
+    CMD_APPEND_TEMP_MACRO_CHUNK=[0x02, 0x58]
+    CMD_ERASE_ORBBAS=[0x02, 0x60]
+    CMD_APPEND_FRAG=[0x02, 0x61]
+    CMD_EXEC_ORBBAS=[0x02, 0x62]
+    CMD_ABORT_ORBBAS=[0x02, 0x63]
+    CMD_ANSWER_INPUT=[0x02, 0x64]
+
+class MACRO_CODES(Enum):
+    SET_STABILIZATION=0x03
+    SET_HEADING=0x04
+    SET_ROTATION_RATE=0x13

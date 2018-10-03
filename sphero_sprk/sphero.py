@@ -6,8 +6,11 @@ import threading
 
 import bluepy
 import yaml
-from .util import *
+import sphero_sprk.util as util
+from sphero_sprk.timeout import Timeout
+
 from sphero_sprk.delegate_object import DelegateObj
+from sphero_sprk.sphero_constants import CMD_CODES, MACRO_CODES
 
 #should it be in a different format?
 RobotControlService = "22bb746f2ba075542d6f726568705327"
@@ -81,11 +84,18 @@ class Sphero(object):
         self._notification_lock = threading.RLock()
         #start a listener loop
 
-    def connect(self, addr):
-        """
+    def connect(self):
+        '''
         Connects the sphero with the address given in the constructor
-        """
-        self._device = bluepy.btle.Peripheral(addr, addrType=bluepy.btle.ADDR_TYPE_RANDOM)
+        :return: True if it succeeds, False if it times out
+        '''
+
+        try:
+            with Timeout(5):
+                self._device = bluepy.btle.Peripheral(self._addr, addrType=bluepy.btle.ADDR_TYPE_RANDOM)
+        except Timeout:
+            raise TimeoutError("Device Timed out")
+
         self._notifier = DelegateObj(self, self._notification_lock)
         #set notifier to be notified
         self._device.withDelegate(self._notifier)
@@ -100,9 +110,7 @@ class Sphero(object):
             uuid_str = binascii.b2a_hex(characteristic.uuid.binVal).decode('utf-8')
             self._cmd_characteristics[uuid_str] = characteristic
 
-        self._listening_flag = True
-        self._listening_thread = threading.Thread(target=self._listening_loop)
-        self._listening_thread.start()
+        return True
 
 
     def _devModeOn(self):
@@ -138,7 +146,7 @@ class Sphero(object):
         #set the sop2 based on the blocking command
         sop2 = "ff" if resp else "fe"
         #send command
-        seq_num = self._send_command(sop2, "02", cmd, data_list)
+        seq_num = self._send_command(sop2, cmd.value[0], cmd.value[1], data_list)
         #check if blocking
         if(resp):
             resp = self._notifier.wait_for_resp(seq_num)
@@ -151,13 +159,13 @@ class Sphero(object):
         
         sop1 = binascii.a2b_hex("ff")
         sop2 = binascii.a2b_hex(sop2)
-        did = binascii.a2b_hex(did)
-        cid = binascii.a2b_hex(cid)
+        did = bytes([did])
+        cid = bytes([cid])
         seq_val = self._get_sequence()
         seq = seq_val.to_bytes(1,"big")
-        dlen = (count_data_size(data_list)+1).to_bytes(1,"big")#add one for checksum
+        dlen = (util.count_data_size(data_list)+1).to_bytes(1,"big")#add one for checksum
         packet = [sop1,sop2,did,cid,seq,dlen] + data_list
-        packet += [cal_packet_checksum(packet[2:]).to_bytes(1,'big')] #calculate the checksum
+        packet += [util.cal_packet_checksum(packet[2:]).to_bytes(1,'big')] #calculate the checksum
         #write the command to Sphero
         #print("cmd:{} packet:{}".format(cid, b"".join(packet)))
         with self._notification_lock:
@@ -191,7 +199,8 @@ class Sphero(object):
     """ CORE functionality """
 
     def ping(self):
-        return self._send_command("ff","00","01",[])
+        resp = self.command(CMD_CODES.CMD_PING, [], resp=True)
+        return resp
 
     def version(self):
         #NOTE returning weird data not sure what's wrong
@@ -219,6 +228,17 @@ class Sphero(object):
 
     """ Sphero functionality """
 
+    def config_locator(self, x, y, yaw_tare, flag=0, resp=False):
+
+
+        x_bytes = x.to_bytes(2, byteorder='big')
+        y_bytes = y.to_bytes(2, byteorder='big')
+        yaw_tare_bytes = yaw_tare.to_bytes(2, byteorder='big')
+
+        data = [flag, x_bytes[0], x_bytes[1], y_bytes[0], y_bytes[1],
+                yaw_tare_bytes[0], yaw_tare_bytes[1]]
+        self.command(CMD_CODES.CMD_LOCATOR, data, resp=False)
+
     def roll(self, speed, heading, resp=False):
         """
         Roll the ball towards the heading
@@ -230,38 +250,53 @@ class Sphero(object):
         heading_bytes = heading.to_bytes(2,byteorder='big')
         data = [speed,heading_bytes[0],heading_bytes[1], 1]
         #send command
-        self.command('30',data, resp=resp)
+        self.command(CMD_CODES.CMD_ROLL,data, resp=resp)
 
 
     def boost(self):
         raise NotImplementedError
 
+    def set_stabilization(self, flag, resp=False):
+
+        data = [b'01'] if flag else [b'00']
+
+        self.command(CMD_CODES.CMD_SET_STABILIZ, data, resp=resp)
+
+    def set_tail_light(self, brightness, resp=False):
+
+        data = [brightness]
+        self.command(CMD_CODES.CMD_SET_BACK_LED, data, resp=resp)
+
+
     def set_heading(self, heading, resp=False):
-        """
+        '''
         change the heading of the robot
 
-        heading - (int) heading in the range of 0-355
-        resp - (bool) Whether to receive comfirmation response from sphero
-        """
+        Note: Only setting to 0 seems to be working
+        :param heading: (int) heading in the range of 0-355
+        :param resp:(bool) Whether to receive comfirmation response from sphero
+        :return:
+        '''
         heading_bytes = heading.to_bytes(2,byteorder='big')
         data = [heading_bytes[0],heading_bytes[1]]
         #send command
-        self.command("01",data, resp=resp)
+        resp = self.command(CMD_CODES.CMD_SET_HEADING,data, resp=resp)
+        pass
 
-
-    def set_rgb_led(self, red, green, blue, resp=False):
-        """
+    def set_rgb_led(self, red, green, blue, persist = False, resp=False):
+        '''
         Set the color of Sphero's LED
-
-        red - (int) Color of red in range 0-255
-        green - (int) Color of green in range 0-255
-        blue - (int) Color of blue in range 0-255
-        resp - (bool) whether the code will wait for comfirmation from Sphero
-        """
+        :param red: (int) Color of red in range 0-255
+        :param green: (int) Color of green in range 0-255
+        :param blue: (int) Color of blue in range 0-255
+        :param persist: Whether to set as default color
+        :param resp: Whether to wait for response
+        :return:
+        '''
         #set data
-        data = [red, green, blue, 0]
+        data = [red, green, blue, int(persist)]
         #send command
-        self.command("20", data, resp=resp)
+        self.command(CMD_CODES.CMD_SET_RGB_LED, data, resp=resp)
 
 
     def get_rgb_led(self):
@@ -272,7 +307,7 @@ class Sphero(object):
         """
 
         #set the correct command
-        (seq_num, resp) = self.command("22",[])
+        (seq_num, resp) = self.command(CMD_CODES.CMD_GET_RGB_LED,[])
         #parse the response packet and make sure it's correct
         if resp and resp[4] == 4:
             MRSP = resp[2]
@@ -293,9 +328,9 @@ class Sphero(object):
         '''
 
         if(remove):
-            optr = XOR_mask
+            optr = util.XOR_mask
         else:
-            optr = OR_mask
+            optr = util.OR_mask
 
         if(mask==1):
             for i,group in enumerate(self._mask_list1):
@@ -384,7 +419,7 @@ class Sphero(object):
         resp[Optional] - (bool) whether the code will wait for comfirmation from Sphero, default to False
         """
         data = ["01" if bool_flag else "00"]
-        self.command("02",data, resp=resp)
+        self.command(CMD_CODES.CMD_SET_STABILIZ,data, resp=resp)
 
 
     def set_raw_motor_values(self,lmode,lpower,rmode,rpower, resp=False):
@@ -399,7 +434,7 @@ class Sphero(object):
         data = [lmode, int(lpower), rmode, int(rpower)]
         
         #By default, we going to cancel it
-        self.command("33",data, resp=resp) 
+        self.command(CMD_CODES.CMD_SET_RAW_MOTORS,data, resp=resp)
 
     """ About MACRO  """
 
@@ -409,7 +444,7 @@ class Sphero(object):
         id - (int) the ID of the macro to stop
         """
         data = [id_]
-        self.command("55",data)
+        self.command(CMD_CODES.CMD_ABORT_MACRO,data)
 
     def run_macro(self, id_):
         """
@@ -417,7 +452,7 @@ class Sphero(object):
         id_ - (int) the 8-bit ID of the macro
         """
         data = [id_]
-        self.command("50",data)
+        self.command(CMD_CODES.CMD_RUN_MACRO,data)
 
     """ OrbBasic the programming language """
 
@@ -430,7 +465,7 @@ class Sphero(object):
         area - (str) hex name of the area to be cleaned
         """
         data = [area]
-        seq = self.command("60", data)
+        seq = self.command(CMD_CODES.CMD_ERASE_ORBBAS, data)
         if(block):
             return self._notifier.wait_for_sim_response(seq)
         else:
@@ -444,7 +479,7 @@ class Sphero(object):
         """
         data = [area,start_line.to_bytes(2,byteorder='big')]
 
-        seq = self.command("62", data)
+        seq = self.command(CMD_CODES.CMD_EXEC_ORBBAS, data)
         return self._notifier.wait_for_sim_response(seq)
 
     def abort_orb_basic_program(self):
@@ -452,7 +487,7 @@ class Sphero(object):
         Abort the orb_basic program
         """
         data = []
-        seq = self.command("63", data)
+        seq = self.command(CMD_CODES.CMD_ABORT_ORBBAS, data)
         return self._notifier.wait_for_sim_response(seq)
 
     def append_orb_basic_fragment(self, area,val):
@@ -463,7 +498,7 @@ class Sphero(object):
         """
         val.insert(0, area)
         data = val
-        seq = self.command("61",data)
+        seq = self.command(CMD_CODES.CMD_APPEND_FRAG,data)
         if self._notifier.wait_for_sim_response(seq):
             pass
         else:

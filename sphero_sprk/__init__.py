@@ -1,2 +1,1 @@
-from .sphero import *
-from .util import *
+from .sphero import Sphero
