@@ -231,8 +231,8 @@ class Sphero(object):
     def config_locator(self, x, y, yaw_tare, flag=0, resp=False):
 
 
-        x_bytes = x.to_bytes(2, byteorder='big')
-        y_bytes = y.to_bytes(2, byteorder='big')
+        x_bytes = x.to_bytes(2, byteorder='big', signed=True)
+        y_bytes = y.to_bytes(2, byteorder='big', signed=True)
         yaw_tare_bytes = yaw_tare.to_bytes(2, byteorder='big')
 
         data = [flag, x_bytes[0], x_bytes[1], y_bytes[0], y_bytes[1],
